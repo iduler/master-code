@@ -321,6 +321,8 @@ class MechanicalBoundaryConditions(BoundaryConditionsMechanicsNeumann, pp.PorePy
         sed_density = self.units.convert_units(sed.density, "kg*m^-3")
         cryst_density = self.units.convert_units(cryst.density, "kg*m^-3")
         g = self.units.convert_units(pp.GRAVITY_ACCELERATION, "m * s^-2")
+
+        # Use constant fluid density for now
         fluid_density = self.fluid.reference_component.density
 
         gravity_sed = g * (
@@ -419,16 +421,6 @@ class ExportMixin(FractureDeformationExporting, pp.PorePyModel):
 
         char = self.evaluate_and_scale(sds, "characteristic_contact_traction", "Pa")
         friction_coefficient = self.evaluate_and_scale(sds, "friction_coefficient", "")
-
-
-
-
-
-
-
-
-
-
 
 
         # --- 3-D subdomain quantities (delta relative to injection start) ---
@@ -536,6 +528,13 @@ class ModelParameters:
             np.array([0.0, 60.0, 80.0, 440.0, 280.0, 380.0, 360.0, 0.0]) * 1e4
         )
 
+        schedule_length = 3 #schedule.size
+
+        schedule = schedule[:schedule_length]
+        total_well_injection_rates = total_well_injection_rates[:schedule_length]
+        injection_positions_from_east = injection_positions_from_east[:schedule_length]
+        injection_rates_from_east = injection_rates_from_east[:schedule_length]
+
         length_scale = 1e3  # m
         domain_sizes = np.array([70, 40, 10]) * length_scale
 
@@ -642,11 +641,12 @@ class ModelParameters:
 
 
 if __name__ == "__main__":
+
     params = ModelParameters()
     model = InjectionPoromechanicsModel(params.model_parameters())
 
     # Export geometry only (comment out when running the full simulation).
-    model.prepare_simulation()
-    model.exporter.write_pvd()
+    # model.prepare_simulation()
+    # model.exporter.write_pvd()
 
-    #pp.run_time_dependent_model(model, params.solver_parameters())
+    pp.run_time_dependent_model(model, params.solver_parameters())
