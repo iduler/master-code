@@ -18,11 +18,14 @@ from porepy.numerics.nonlinear import line_search
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+Scalar = pp.ad.Scalar
+
 # Approximate number of seconds in one calendar month (30.44 days).
 _SECONDS_PER_MONTH: float = 30.44 * 24 * 3600
 
 
 class ModelGeometry(pp.PorePyModel):
+
     """Geometry mixin defining the domain and fracture configuration."""
 
     def domain_sizes(self) -> NDArray[np.float64]:
@@ -93,7 +96,23 @@ class ModelGeometry(pp.PorePyModel):
             ]
         ))
 
+        # Injection constraint at the well location, oriented horizontally on the north face.
+        well_depth = -self.units.convert_units(
+            self.params["well_parameters"]["well_depth"], "m"
+        )
+        half_well_size = 1/2*self.units.convert_units(
+            self.params["well_parameters"]["well_size"], "m"
+        )
+       
+        constraint_injection = pp.PlaneFracture(
+            np.array([[0, 0, dx, dx], 
+                      [dy, dy, dy, dy], 
+                      [well_depth - half_well_size, well_depth + half_well_size, well_depth - half_well_size, well_depth + half_well_size]])
+        )
+
+    
         self._fractures = [elliptic_fracture]
+
 
     def depth(self, points: np.ndarray) -> np.ndarray:
         """Compute depth (positive downward) from point coordinates.
@@ -105,6 +124,37 @@ class ModelGeometry(pp.PorePyModel):
             Depth values for each point.
         """
         return -points[self.nd - 1, :]
+
+
+class Contact_mech(pp.PorePyModel):
+    
+    def friction_bound(self, sd: list[pp.Grid]) -> pp.ad.Operator:
+        """Friction bound [-].
+
+        Dimensionless, since fracture deformation equations consider non-dimensional
+        tractions. In this class, the bound is given by
+
+        .. math::
+            - F t_n
+
+        where :math:`F` is the friction coefficient and :math:`t_n` is the normal
+        component of the contact traction.
+
+        Parameters:
+            subdomains: List of fracture subdomains.
+
+        Returns:
+            Cell-wise friction bound operator [-].
+
+        """
+        c = 0.0
+
+        t_n: pp.ad.Operator = self.normal_component(sd) @ self.contact_traction(sd)
+        bound: pp.ad.Operator = (
+            Scalar(-1.0) * self.friction_coefficient(sd) * t_n + Scalar(c)
+        )
+        bound.set_name("friction_bound")
+        return bound
 
 
 class PressureBoundaryConditions(pp.PorePyModel):
@@ -419,8 +469,21 @@ class ExportMixin(FractureDeformationExporting, pp.PorePyModel):
         cell_offsets_nd = np.cumsum([0] + [sd.num_cells * self.nd for sd in sds])
         cell_offsets = np.cumsum([0] + [sd.num_cells for sd in sds])
 
-        char = self.evaluate_and_scale(sds, "characteristic_contact_traction", "Pa")
-        friction_coefficient = self.evaluate_and_scale(sds, "friction_coefficient", "")
+        friction_bound = self.evaluate_and_scale(sds, "friction_bound", "Pa")
+
+        traction = self.evaluate_and_scale(sds, "contact_traction", "-").reshape(
+            (self.nd, -1), order="F"
+        )
+
+        rhs = friction_bound
+
+        # all rows exept normal
+        lhs = np.linalg.norm(traction[:-1], axis=0)
+
+        slip_indicator = np.where(lhs >= rhs, 1.0, 0.0)
+
+        for i, sd in enumerate(sds):
+            data += [(sd, "slip_indicator", slip_indicator[cell_offsets[i]:cell_offsets[i + 1]])]
 
 
         # --- 3-D subdomain quantities (delta relative to injection start) ---
@@ -473,6 +536,7 @@ class InjectionPoromechanicsModel(
     # Constitutive laws.
     pp.constitutive_laws.GravityForce,
     pp.constitutive_laws.CubicLawPermeability,
+    Contact_mech,
     # Boundary condition mixins.
     PressureBoundaryConditions,
     MechanicalBoundaryConditions,
@@ -528,7 +592,7 @@ class ModelParameters:
             np.array([0.0, 60.0, 80.0, 440.0, 280.0, 380.0, 360.0, 0.0]) * 1e4
         )
 
-        schedule_length = 3 #schedule.size
+        schedule_length = schedule.size
 
         schedule = schedule[:schedule_length]
         total_well_injection_rates = total_well_injection_rates[:schedule_length]
@@ -539,7 +603,7 @@ class ModelParameters:
         domain_sizes = np.array([70, 40, 10]) * length_scale
 
         meshing_parameters = {
-            "cell_size_boundary": length_scale * 4,
+            "cell_size_boundary": length_scale*4,
             "cell_size_fracture": length_scale*2,
             "cell_size_min": length_scale,
         }
@@ -554,7 +618,8 @@ class ModelParameters:
             "friction_coefficient": 0.75,
             "residual_aperture": 1e-4, # m
             "fracture_gap": 0.0,       # m
-            "normal_permeability": 1.0e-8,  # m^2
+            "normal_permeability": 1.0e-8, # m^2
+            #"cohesion": 0  # Pa
         }
 
         crystalline_rock_parameters = {
@@ -567,11 +632,12 @@ class ModelParameters:
             "friction_coefficient": 0.65,
             "residual_aperture": 1e-4, # m
             "fracture_gap": 0.0,       # m
-            "normal_permeability": 1.0e-8,  # m^2
+            "normal_permeability": 1.0e-8,
+            #"cohesion": 0   # m^2
         }
 
         fracture_parameters = {
-            "num_fractures": 2,
+            "num_fractures": 3,
             "fracture_major_axes": np.array([7000]),   # m
             "fracture_minor_axes": np.array([3000]),   # m
             "strike_angles": np.array([np.radians(48)]),
@@ -584,12 +650,12 @@ class ModelParameters:
 
         return {
             "well_parameters": {
-                "well_depth": 2250.0,                                  # m
-                "well_size": meshing_parameters["cell_size_boundary"],  # m
+                "well_depth": 7000.0,  # m
+                "well_size":  meshing_parameters["cell_size_boundary"],    # m
             },
             "layer_parameters": {
                 "depth_top_domain": 2000.0,  # m
-                "interface_depth": 2500.0,   # m
+                "interface_depth":  2500.0,   # m
             },
             "fracture_parameters": fracture_parameters,
             "time_manager": pp.TimeManager(
@@ -619,7 +685,8 @@ class ModelParameters:
             "units": pp.Units(m=1.0, kg=1.0e5, K=1.0),
             "grid_type": "simplex",
             "meshing_arguments": meshing_parameters,
-            #"meshing_kwargs": {"constraints": np.array([1])},
+            #"meshing_kwargs": {"constraints": np.array([1, 2])},
+            "fracture_indices": np.array([0]),
             "domain_sizes": domain_sizes,
             "adaptive_indicator_scaling": 1,
             "folder_name": "fluid_injection_3D",
@@ -645,8 +712,7 @@ if __name__ == "__main__":
     params = ModelParameters()
     model = InjectionPoromechanicsModel(params.model_parameters())
 
-    # Export geometry only (comment out when running the full simulation).
-    # model.prepare_simulation()
-    # model.exporter.write_pvd()
+    model.prepare_simulation()
+    model.exporter.write_pvd()
 
-    pp.run_time_dependent_model(model, params.solver_parameters())
+   # pp.run_time_dependent_model(model, params.solver_parameters())
