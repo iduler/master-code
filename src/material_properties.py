@@ -14,7 +14,6 @@ class HeterogeneousProperties(pp.PorePyModel):
         # For sedimentary and crystalline rock.
         sed = materials["sedimentary"]
         crys = materials["crystalline"]
-
         
         value_1 = getattr(sed, property_name)
         value_2 = getattr(crys, property_name)
@@ -108,6 +107,17 @@ class HeterogeneousProperties(pp.PorePyModel):
         return pp.wrap_as_dense_ad_array(vals, "shear_modulus")
 
 
+    def cohesion(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
+        """Compute cohesion for heterogeneous rock layers.
+        
+        Returns cohesion values in Pa for sedimentary and crystalline layers
+        based on cell center depths relative to the interface.
+        """
+       # vals = self.make_heterogeneous(subdomains, "cohesion")
+       # vals = self.units.convert_units(vals, "Pa")
+       # return pp.wrap_as_dense_ad_array(vals, "cohesion")
+    
+
     def residual_aperture(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute residual aperture for heterogeneous rock layers.
         
@@ -117,7 +127,7 @@ class HeterogeneousProperties(pp.PorePyModel):
         vals = self.make_heterogeneous(subdomains, "residual_aperture")
         vals = self.units.convert_units(vals, "m")
         return pp.wrap_as_dense_ad_array(vals, "residual_aperture")
-
+    
 
     def fracture_gap(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute fracture gap for heterogeneous rock layers.
