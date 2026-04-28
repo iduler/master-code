@@ -15,6 +15,8 @@ from porepy.applications.initial_conditions.model_initial_conditions import (
 from porepy.viz.data_saving_model_mixin import FractureDeformationExporting
 from porepy.numerics.nonlinear import line_search
 
+from Grid import CombinedGeometry
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -24,7 +26,7 @@ Scalar = pp.ad.Scalar
 _SECONDS_PER_MONTH: float = 30.44 * 24 * 3600
 
 
-class ModelGeometry(pp.PorePyModel):
+class ModelGeometry():
 
     """Geometry mixin defining the domain and fracture configuration."""
 
@@ -96,21 +98,6 @@ class ModelGeometry(pp.PorePyModel):
             ]
         ))
 
-        # Injection constraint at the well location, oriented horizontally on the north face.
-        well_depth = -self.units.convert_units(
-            self.params["well_parameters"]["well_depth"], "m"
-        )
-        half_well_size = 1/2*self.units.convert_units(
-            self.params["well_parameters"]["well_size"], "m"
-        )
-       
-        constraint_injection = pp.PlaneFracture(
-            np.array([[0, 0, dx, dx], 
-                      [dy, dy, dy, dy], 
-                      [well_depth - half_well_size, well_depth + half_well_size, well_depth - half_well_size, well_depth + half_well_size]])
-        )
-
-    
         self._fractures = [elliptic_fracture]
 
 
@@ -133,8 +120,8 @@ class Contact_mech(pp.PorePyModel):
 
         Dimensionless, since fracture deformation equations consider non-dimensional
         tractions. In this class, the bound is given by
-
-        .. math::
+       .. math::
+ 
             - F t_n
 
         where :math:`F` is the friction coefficient and :math:`t_n` is the normal
@@ -176,7 +163,7 @@ class PressureBoundaryConditions(pp.PorePyModel):
         dirichlet_faces = sides.west + sides.bottom + sides.east + sides.south
         return pp.BoundaryCondition(sd, dirichlet_faces, "dir")
 
-    def well_injection(self, x_coords: np.ndarray) -> np.ndarray:
+    def well_injection(self, points: np.ndarray) -> np.ndarray:
         """Compute spatially distributed injection flux for the given x-coordinates.
 
         The injection profile is derived by interpolating the prescribed well rates
@@ -184,20 +171,27 @@ class PressureBoundaryConditions(pp.PorePyModel):
         total flux matches the time-interpolated target rate.
 
         Parameters:
-            x_coords: x-coordinates of the inflow boundary cells.
+            points: Array of point coordinates, shape (nd, num_points).
 
         Returns:
             Mass flux values for each supplied coordinate.
             Returns zeros when no injection is scheduled at the current time.
         """
+
         target_rates = self.params["well_injection_rates"]
+        
         total_flux = self.get_well_value(
             target_rates, self.time_manager.schedule, self.time_manager.time
         )
 
-        # No injection during the pre-injection phase.
+        # No injection during the pre-injection phase. [0] to get rigth size of the array.
         if total_flux == 0 and self.time_manager.time <= 3 * pp.YEAR:
-            return np.zeros_like(x_coords)
+            return np.zeros_like(points[0])
+
+
+        x_coords = points[0]
+        z_coords = points[2]
+
 
         # Interpolate prescribed rates (m^3/month) onto the cell x-coordinates.
         well_positions_from_east = self.units.convert_units(
@@ -205,20 +199,35 @@ class PressureBoundaryConditions(pp.PorePyModel):
         )
         start_rates = self.params["injection_rates_from_east"]  # m^3/month
         positions_from_west = self.domain_sizes()[0] - well_positions_from_east
-        rates_at_cells = np.interp(x_coords, positions_from_west, start_rates)
+        rates_at_cells_x = np.interp(x_coords, positions_from_west, start_rates)
+
+
+
+        # Interpolate prescribed rates (m^3/month) onto the cell z-coordinates.
+        positive_injection_positions_depth = self.units.convert_units(
+            self.params["injection_positions_depth"], "m"
+        )
+        injection_weights_depth = self.params["injection_weights_depth"] 
+
+        rates_at_cells_z = np.interp(-z_coords, positive_injection_positions_depth, injection_weights_depth)
+
+        # Combine x and z profiles by multiplying the rates.
+        rates_at_cells = rates_at_cells_x * rates_at_cells_z
 
         total_unscaled = np.sum(rates_at_cells)
         if total_unscaled == 0:
-            # No injection cells within this subdomain.
-            return np.zeros_like(x_coords)
+            # No injection cells within this subdomain. [0] to get rigth size of the array.
+            return np.zeros_like(points[0])
 
         scaling = total_flux / total_unscaled
 
         # Sign convention: inflow is negative. Factor of 1/2 for model symmetry.
+        # Convert from volumetric flux (m^3/month) by deviding on _SECONDS_PER_MONTH
+        # Correct unit for integrated darcy flux
+        # devide for now 10**3 to make it converge
         return self.units.convert_units(
-            -scaling / (2.0 * _SECONDS_PER_MONTH) * rates_at_cells,
-            "kg * m ^ 3 * s ^ -1",
-        )
+            -scaling / (2.0 * 10**3 *_SECONDS_PER_MONTH) * rates_at_cells,
+            "m ^ 3 * s ^ -1")
 
     def bc_values_darcy_flux(self, bg: pp.BoundaryGrid) -> np.ndarray:
         """Compute Darcy flux values on the boundary.
@@ -235,17 +244,15 @@ class PressureBoundaryConditions(pp.PorePyModel):
         flux_values = np.zeros(bg.num_cells)
         domain_sides = self.domain_boundary_sides(bg)
 
-        well_z = -self.units.convert_units(self.params["well_parameters"]["well_depth"], "m")
-        half_size = self.units.convert_units(self.params["well_parameters"]["well_size"], "m") / 2
 
+        interface = -self.units.convert_units(self.params["layer_parameters"]["interface_depth"], "m")
         
         inflow_mask = domain_sides.north.copy()
         
-        # Restrict injection to north-face cells within the well depth window.
-        inflow_mask  &=bg.cell_centers[2] >= well_z - half_size
-        inflow_mask  &=bg.cell_centers[2] <= well_z + half_size
-
-        flux_values[inflow_mask] = self.well_injection(bg.cell_centers[0, inflow_mask])
+        # Restrict injection to north-face cells within the top rock layer. - 5000 for now to make it converge. 
+        inflow_mask  &=bg.cell_centers[2] > interface - 5000.0
+        
+        flux_values[inflow_mask] = self.well_injection(bg.cell_centers[:, inflow_mask])
 
         #  Plot of the injection profile.
         x_km = bg.cell_centers[0, inflow_mask] / 1e3
@@ -449,7 +456,6 @@ class MechanicalBoundaryConditions(BoundaryConditionsMechanicsNeumann, pp.PorePy
                         * sign
                         * bg.cell_volumes[lower]
                     )
-
         return values.ravel("F")
 
 
@@ -581,7 +587,7 @@ class ModelParameters:
 
         # Total injection rates per time step [m^3/month].
         total_well_injection_rates = (
-            np.array([0.0, 0.0, 0.25, 0.25, 0.25, 0.5, 1.25, 1.75, 1.5]) * 1e7
+            np.array([0.0, 0.0, 0.25, 0.25, 0.25, 0.5, 1.25, 1.75, 1.5]) * 1e6
         )
 
         # Spatial injection profile: positions [m] and rates [m^3/month] from east.
@@ -589,15 +595,18 @@ class ModelParameters:
             np.array([7.0, 6.125, 5.25, 3.5, 2.625, 1.75, 0.875, 0.0]) * 1e4
         )
         injection_rates_from_east = (
-            np.array([0.0, 60.0, 80.0, 440.0, 280.0, 380.0, 360.0, 0.0]) * 1e4
+            np.array([0.0, 60.0, 80.0, 440.0, 280.0, 380.0, 360.0, 0.0]) * 1e3
         )
+
+        # Depth points for well injection profile and corresponding weights
+        injection_positions_depth =   np.array([2000.0, 2100.0, 2200.0, 2250.0, 2300.0, 2400.0, 2500.0])
+
+        injection_weights_depth =    np.array([2.0, 10.0, 20.0, 36.0, 20.0, 10.0, 2.0])
 
         schedule_length = schedule.size
 
         schedule = schedule[:schedule_length]
         total_well_injection_rates = total_well_injection_rates[:schedule_length]
-        injection_positions_from_east = injection_positions_from_east[:schedule_length]
-        injection_rates_from_east = injection_rates_from_east[:schedule_length]
 
         length_scale = 1e3  # m
         domain_sizes = np.array([70, 40, 10]) * length_scale
@@ -605,7 +614,7 @@ class ModelParameters:
         meshing_parameters = {
             "cell_size_boundary": length_scale*4,
             "cell_size_fracture": length_scale*2,
-            "cell_size_min": length_scale,
+            #"cell_size_min": length_scale*0.5,
         }
 
         sedimentary_rock_parameters = {
@@ -649,10 +658,6 @@ class ModelParameters:
         }
 
         return {
-            "well_parameters": {
-                "well_depth": 7000.0,  # m
-                "well_size":  meshing_parameters["cell_size_boundary"],    # m
-            },
             "layer_parameters": {
                 "depth_top_domain": 2000.0,  # m
                 "interface_depth":  2500.0,   # m
@@ -670,6 +675,10 @@ class ModelParameters:
             "well_injection_rates": total_well_injection_rates,
             "injection_positions_from_east": injection_positions_from_east,
             "injection_rates_from_east": injection_rates_from_east,
+            "injection_positions_depth": injection_positions_depth,
+            "injection_weights_depth": injection_weights_depth,
+
+
             "material_parameters": {
                 "sedimentary": pp.SolidConstants(**sedimentary_rock_parameters),
                 "crystalline": pp.SolidConstants(**crystalline_rock_parameters),
@@ -685,8 +694,8 @@ class ModelParameters:
             "units": pp.Units(m=1.0, kg=1.0e5, K=1.0),
             "grid_type": "simplex",
             "meshing_arguments": meshing_parameters,
-            #"meshing_kwargs": {"constraints": np.array([1, 2])},
-            "fracture_indices": np.array([0]),
+           # "meshing_kwargs": {"constraints": np.array([0])},
+            #"fracture_indices": np.array([0]),
             "domain_sizes": domain_sizes,
             "adaptive_indicator_scaling": 1,
             "folder_name": "fluid_injection_3D",
@@ -712,7 +721,7 @@ if __name__ == "__main__":
     params = ModelParameters()
     model = InjectionPoromechanicsModel(params.model_parameters())
 
-    model.prepare_simulation()
-    model.exporter.write_pvd()
+    #model.prepare_simulation()
+    #model.exporter.write_pvd()
 
-   # pp.run_time_dependent_model(model, params.solver_parameters())
+    pp.run_time_dependent_model(model, params.solver_parameters())

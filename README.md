@@ -50,7 +50,7 @@ Do one of these to run the simulation:
 The model solves fully coupled Biot poromechanics:
 
 - Darcy flow (including fracture permeability)
-- Linear elasticity
+- Linear poroelasticity
 - Gravity body forces
 - Frictional contact mechanics on fractures
 
