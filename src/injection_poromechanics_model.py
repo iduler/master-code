@@ -222,12 +222,15 @@ class PressureBoundaryConditions(pp.PorePyModel):
         scaling = total_flux / total_unscaled
 
         # Sign convention: inflow is negative. Factor of 1/2 for model symmetry.
-        # Convert from volumetric flux (m^3/month) by deviding on _SECONDS_PER_MONTH
-        # Correct unit for integrated darcy flux
-        # devide for now 10**3 to make it converge
-        return self.units.convert_units(
-            -scaling / (2.0 * 10**3 *_SECONDS_PER_MONTH) * rates_at_cells,
-            "m ^ 3 * s ^ -1")
+        # Convert m^3/month to m^3/s, then multiply by viscosity so that the 1/mu
+        # PorePy applies later via the upwind mobility recovers the prescribed
+        # volumetric flux. Resulting unit: m^3 * Pa.
+        viscosity = self.fluid.reference_component.viscosity
+        volumetric_flux = self.units.convert_units(
+            -scaling / (2.0 * _SECONDS_PER_MONTH) * rates_at_cells,
+            "m^3 * s^-1",
+        )
+        return volumetric_flux * viscosity
 
     def bc_values_darcy_flux(self, bg: pp.BoundaryGrid) -> np.ndarray:
         """Compute Darcy flux values on the boundary.
@@ -249,8 +252,8 @@ class PressureBoundaryConditions(pp.PorePyModel):
         
         inflow_mask = domain_sides.north.copy()
         
-        # Restrict injection to north-face cells within the top rock layer. - 5000 for now to make it converge. 
-        inflow_mask  &=bg.cell_centers[2] > interface - 5000.0
+        # Restrict injection to north-face cells within the top rock layer.
+        inflow_mask  &=bg.cell_centers[2] > interface
         
         flux_values[inflow_mask] = self.well_injection(bg.cell_centers[:, inflow_mask])
 
@@ -618,7 +621,7 @@ class ModelParameters:
         }
 
         sedimentary_rock_parameters = {
-            "biot_coefficient": 0.7,
+            "biot_coefficient": 0.8,
             "density": 2680.0,         # kg/m^3
             "porosity": 0.275,
             "permeability": 1.0e-12,   # m^2
@@ -686,6 +689,9 @@ class ModelParameters:
                 "numerical_parameters": pp.NumericalConstants(
                     characteristic_displacement=1e-2
                 ),
+            },
+            "material_constants": {
+                "fluid": pp.FluidComponent(**pp.fluid_values.water),
             },
             "reference_variable_values": pp.ReferenceVariableValues(
                 pressure=pp.ATMOSPHERIC_PRESSURE,

@@ -16,7 +16,7 @@ class CombinedGeometry:
     _top_depth: float       = 2000.0    # m  depth of top boundary
     _interface_depth: float = 2500.0    # m  sedimentary / crystalline interface
     _bottom_depth: float    = 12000.0   # m  depth of bottom boundary
-    _n_sed_layers: int      = 2         # number of uniform sedimentary layers
+    _n_sed_layers: int      = 4         # number of uniform sedimentary layers
 
     def box_2d(self) -> dict:
         dx = self.units.convert_units(70000.0, "m")
@@ -94,13 +94,14 @@ class CombinedGeometry:
         num_new_faces = g.num_faces - g_3d_bottom.num_faces
         # Create sparse zeros for the new faces in the top grid.
         zeros_top = sps.csr_matrix(( primary_secondary_map_bottom.shape[0], num_new_faces))
+    
         # Concatenate the old map with the zeros to create the new map for the bottom interface.
-        primary_secondary_map = sps.hstack([primary_secondary_map_bottom, zeros_top], format="csr")
-        intf = fsdkløfkøadskodfawpp.MortarGrid(2)
-        self.mdg.add_interface(intf_bottom, [g, g_2d], primary_secondary_map)
+        primary_secondary_map = sps.hstack([primary_secondary_map_bottom, zeros_top], format="csc")
+        pp.fracs.meshing.create_interfaces(self.mdg,{(g, g_2d): primary_secondary_map})
+
+        # self.mdg.add_interface(intf_bottom, [g, g_2d], primary_secondary_map)
         self.mdg.compute_geometry()
         self.mdg.set_boundary_grid_projections()
-
         self.nd: int = self.mdg.dim_max()
 
         # Create projections between local and global coordinates for fracture grids.

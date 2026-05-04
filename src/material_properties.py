@@ -161,6 +161,7 @@ class HeterogeneousProperties(pp.PorePyModel):
 
         return pp.SecondOrderTensor(biot_values)
 
+    # Need documentation
     def youngs_modulus(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute Young's modulus for heterogeneous rock layers.
         
@@ -202,11 +203,12 @@ class HeterogeneousProperties(pp.PorePyModel):
         Returns fourth-order stiffness tensor in Pa for sedimentary and crystalline layers
         based on cell center depths relative to the interface.
         """
-        shear_modulus = self.make_heterogeneous([subdomains],"shear_modulus")
-        lame_lambda = self.make_heterogeneous([subdomains],"lame_lambda")
+        mu = self.make_heterogeneous([subdomains], "shear_modulus")
+        lmbda = self.make_heterogeneous([subdomains], "lame_lambda")
 
-        lmbda = lame_lambda 
-        mu = shear_modulus 
+        mu = self.units.convert_units(mu, "Pa")
+        lmbda = self.units.convert_units(lmbda, "Pa")
+
         return pp.FourthOrderTensor(mu, lmbda)
 
     def grid_aperture(self,  subdomains: pp.Grid) -> np.ndarray:
