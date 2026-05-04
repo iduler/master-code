@@ -1,3 +1,9 @@
+"""3D grid construction for the two-layer (crystalline + sedimentary) model.
+
+Adapted from code by Eirik Keilegavlen and Ingrid Kristine Jacobsen,
+with help from Ivar Stefansson.
+"""
+
 import numpy as np
 import scipy.sparse as sps
 
@@ -11,30 +17,51 @@ class CombinedGeometry:
     The bottom layer is meshed by PorePy as a 3D simplex grid. The top face of
     that grid is extracted, extruded with uniform layers, and pasted onto the
     bottom layer. The result is wrapped in a `MixedDimensionalGrid`.
+
+    Layer geometry is read from ``self.params``:
+      * ``layer_parameters["depth_top_domain"]`` — depth of the top boundary [m]
+      * ``layer_parameters["interface_depth"]`` — sediment/crystalline interface [m]
+      * ``layer_parameters["n_sedimentary_layers"]`` — uniform extrusion layers
+        in the sedimentary block.
+      * ``domain_sizes`` — ``[x_size, y_size, z_size]`` in m; the bottom depth
+        is ``depth_top_domain + z_size``.
     """
 
-    _top_depth: float       = 2000.0    # m  depth of top boundary
-    _interface_depth: float = 2500.0    # m  sedimentary / crystalline interface
-    _bottom_depth: float    = 12000.0   # m  depth of bottom boundary
-    _n_sed_layers: int      = 4         # number of uniform sedimentary layers
+    def top_depth(self) -> float:
+        """Depth of the top boundary, in m (positive = downward)."""
+        return float(self.params["layer_parameters"]["depth_top_domain"])
+
+    def interface_depth(self) -> float:
+        """Depth of the sediment-crystalline interface, in m."""
+        return float(self.params["layer_parameters"]["interface_depth"])
+
+    def bottom_depth(self) -> float:
+        """Depth of the bottom boundary, in m (= top depth + vertical extent)."""
+        return self.top_depth() + float(self.params["domain_sizes"][2])
+
+    def n_sed_layers(self) -> int:
+        """Number of uniform layers in the sedimentary extrusion."""
+        return int(self.params["layer_parameters"]["n_sedimentary_layers"])
 
     def box_2d(self) -> dict:
-        dx = self.units.convert_units(70000.0, "m")
-        dy = self.units.convert_units(40000.0, "m")
+        """Return the horizontal extent of the domain in model units."""
+        dx, dy, _ = self.params["domain_sizes"]
+        dx = self.units.convert_units(dx, "m")
+        dy = self.units.convert_units(dy, "m")
         return {"xmin": 0.0, "xmax": dx, "ymin": 0.0, "ymax": dy}
 
     def set_domain(self) -> None:
         box = self.box_2d()
         box.update({
-            "zmin": self.units.convert_units(-self._bottom_depth, "m"),
-            "zmax": self.units.convert_units(-self._top_depth, "m"),
+            "zmin": self.units.convert_units(-self.bottom_depth(), "m"),
+            "zmax": self.units.convert_units(-self.top_depth(), "m"),
         })
         self._domain = pp.Domain(box)
 
     def create_mdg(self) -> None:
-        z_interface = self.units.convert_units(-self._interface_depth, "m")
-        z_top       = self.units.convert_units(-self._top_depth, "m")
-        z_bottom    = self.units.convert_units(-self._bottom_depth, "m")
+        z_interface = self.units.convert_units(-self.interface_depth(), "m")
+        z_top       = self.units.convert_units(-self.top_depth(), "m")
+        z_bottom    = self.units.convert_units(-self.bottom_depth(), "m")
 
     
         # --- Crystalline (bottom) layer: standard 3D simplex mesh ---
@@ -57,7 +84,7 @@ class CombinedGeometry:
 
         # --- Sedimentary (top) layer: uniform extrusion of the interface surface ---
         sed_thickness = z_top - z_interface  # positive (500 m)
-        z_layers = np.linspace(0.0, sed_thickness, self._n_sed_layers + 1)
+        z_layers = np.linspace(0.0, sed_thickness, self.n_sed_layers() + 1)
 
         g_2d_top = extract_surface_grid.extract(g_3d_bottom, target_faces_bottom)
         g_2d_top.compute_geometry()
@@ -69,21 +96,15 @@ class CombinedGeometry:
         # --- Glue the two layers together ---
 
         plane_coefficients = np.array([0, 0, 1]).reshape((3, 1))
-        
+
         g = glue_grids.paste_3d_simplex_grids(
-            g_3d_bottom, g_3d_top, plane_coefficients=plane_coefficients, offset=-2500.0)
+            g_3d_bottom, g_3d_top,
+            plane_coefficients=plane_coefficients,
+            offset=z_interface,
+        )
         
 
         g.compute_geometry()
-
-        # Wrap the pasted grid in a MixedDimensionalGrid so PorePy's model
-        # machinery sees the right type of object.
-        # full_box =  self.box_2d()
-        # full_box.update({"zmin": z_bottom, "zmax":  z_top})
-        # fn_box = pp.create_fracture_network(fractures, domain=pp.Domain(full_box))
-        # self.mdg = pp.create_mdg("simplex", self.meshing_arguments(), fn_box)
-        # self.mdg.remove_subdomain(self.mdg.subdomains(dim=3)[0])
-
         self.mdg = pp.MixedDimensionalGrid()
         self.mdg.add_subdomains([g, g_2d])
         intf_bottom = mdg_bottom.interfaces(dim=2)[0]

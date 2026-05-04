@@ -3,30 +3,56 @@ import numpy as np
 
 
 class HeterogeneousProperties(pp.PorePyModel):
+    """Mixin assigning per-cell material properties based on depth.
+
+    Overrides the standard PorePy material accessors (density, porosity,
+    permeability, elastic moduli, ...) so each cell's value is taken from one
+    of two ``pp.SolidConstants`` objects (``sedimentary`` and ``crystalline``)
+    depending on whether the cell centre lies above or below the
+    sediment-crystalline interface stored in ``params["layer_parameters"]``.
+    """
 
     def make_heterogeneous(self, subdomains: list[pp.Grid], property_name: str) -> np.ndarray:
-        
-        # Get the interfacee depth where the properties change. The interface depth is negative, so we take the negative of it to get the positive depth.
-        # Also we get the material constants for the two materials.
-        interface = -self.params["layer_parameters"]["interface_depth"]
-        materials = self.params["material_parameters"]
+        """Return a per-cell array assigning sed/cryst values by depth.
+
+        For each cell across all supplied subdomains, the value of
+        ``property_name`` is taken from ``layers["sedimentary"]`` if the cell
+        centre is above the interface (z > interface_z) and from
+        ``layers["crystalline"]`` otherwise.
+
+        Parameters:
+            subdomains: List of subdomains. 
+            property_name: Attribute name on ``pp.SolidConstants`` (e.g.
+                ``"density"``, ``"shear_modulus"``).
+
+        Returns:
+            1D numpy array of length ``sum(sd.num_cells for sd in subdomains)``
+            containing the per-cell raw values (no unit conversion applied).
+            Returns an empty array if ``subdomains`` is empty.
+        """
+        # interface_depth is stored as a positive depth; flip the sign so it
+        # matches the z-coordinate convention (z = 0 at surface, z < 0 below).
+        interface = -self.units.convert_units(
+            self.params["layer_parameters"]["interface_depth"], "m"
+        )
+        layers = self.params["layer_parameters"]
 
         # For sedimentary and crystalline rock.
-        sed = materials["sedimentary"]
-        crys = materials["crystalline"]
-        
+        sed = layers["sedimentary"]
+        cryst = layers["crystalline"]
+
         value_1 = getattr(sed, property_name)
-        value_2 = getattr(crys, property_name)
+        value_2 = getattr(cryst, property_name)
 
         vals = []
 
-        # Loop over the subdomains and assign the property values based on the depth of the cell centers. If the cell center is above the interface, we assign value_1, otherwise we assign value_2.
+        # Assign sedimentary value to cells above the interface, crystalline below.
         for sd in subdomains:
             z = sd.cell_centers[2]
             heterogeneous_values = np.where(z > interface, value_1, value_2)
             vals.append(heterogeneous_values)
-        
-        # If there are no subdomains, we return an empty array. hstack does not work with an empty list.
+
+        # hstack does not work with an empty list.
         if len(vals) == 0:
             return np.array([])
         else:
@@ -105,18 +131,15 @@ class HeterogeneousProperties(pp.PorePyModel):
         vals = self.make_heterogeneous(subdomains, "shear_modulus")
         vals = self.units.convert_units(vals, "Pa")
         return pp.wrap_as_dense_ad_array(vals, "shear_modulus")
-
-
     def cohesion(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute cohesion for heterogeneous rock layers.
-        
-        Returns cohesion values in Pa for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
-       # vals = self.make_heterogeneous(subdomains, "cohesion")
-       # vals = self.units.convert_units(vals, "Pa")
-       # return pp.wrap_as_dense_ad_array(vals, "cohesion")
-    
+            """Compute cohesion for heterogeneous rock layers.
+            
+            Returns cohesion values in Pa for sedimentary and crystalline layers
+            based on cell center depths relative to the interface.
+            """
+        # vals = self.make_heterogeneous(subdomains, "cohesion")
+        # vals = self.units.convert_units(vals, "Pa")
+        # return pp.wrap_as_dense_ad_array(vals, "cohesion")
 
     def residual_aperture(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute residual aperture for heterogeneous rock layers.
@@ -161,10 +184,9 @@ class HeterogeneousProperties(pp.PorePyModel):
 
         return pp.SecondOrderTensor(biot_values)
 
-    # Need documentation
     def youngs_modulus(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute Young's modulus for heterogeneous rock layers.
-        
+
         Returns Young's modulus values in Pa for sedimentary and crystalline layers
         based on cell center depths relative to the interface.
         Calculated from shear modulus and Lamé lambda: E = μ(3λ + 2μ)/(λ + μ)
@@ -174,11 +196,20 @@ class HeterogeneousProperties(pp.PorePyModel):
 
         E = mu * (3 * lam + 2 * mu) / (lam + mu)
 
-        # Convert to proper units (Pa)
+        # Convert to proper units (Pa). 
         E = self.units.convert_units(E, "Pa")
 
-        # Repeat to get same size as nondim_traction.
-        E = np.repeat(E, 6)
+        # PorePy multiplies E against the contact traction vector to compute
+        # the characteristic traction. That traction vector has more entries
+        # than fracture cells: each cell contributes `nd` components (one per
+        # spatial direction) on each of the fracture's 2 sides, giving a total
+        # length of `n_fracture_cells * 2 * nd` (= 6 in 3D).
+        #
+        # PorePy's default returns Young's modulus as a single number, which
+        # broadcasts against any size. Our heterogeneous version returns one
+        # value per fracture cell, so we repeat each value `2 * nd` times to
+        # line it up with the traction vector cell-by-cell.
+        E = np.repeat(E, 2 * self.nd)
 
         return pp.wrap_as_dense_ad_array(E, "youngs_modulus")
 
