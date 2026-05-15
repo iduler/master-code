@@ -1,4 +1,21 @@
-fluid_injection_3D/*
-*/fluid_injection_3D/*
+# PorePy simulation export folders (any suffix, e.g. fluid_injection_3D_1).
+fluid_injection_3D*/
+*/fluid_injection_3D*/
+
+# Other simulation/output artefacts.
 gmsh_frac_file*
-*/__pycache__/*
+plots/
+*/plots/
+*.pvd
+*.vtu
+
+# Stand-alone diagnostic PNGs at the workspace root.
+/*.png
+
+# Python bytecode.
+__pycache__/
+*/__pycache__/
+*.pyc
+
+# Virtual environments.
+.venv/
