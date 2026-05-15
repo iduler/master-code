@@ -1,4 +1,4 @@
-"""3D grid construction for the two-layer (crystalline + sedimentary) model.
+"""3D grid construction for the two-layer (crystalline + sedimentary) model. Was not able to make this work. 
 
 Adapted from code by Eirik Keilegavlen and Ingrid Kristine Jacobsen,
 with help from Ivar Stefansson.
@@ -57,12 +57,16 @@ class CombinedGeometry:
             "zmax": self.units.convert_units(-self.top_depth(), "m"),
         })
         self._domain = pp.Domain(box)
-
+    @property
+    def not_glued(self) -> bool:
+        return False
     def create_mdg(self) -> None:
         z_interface = self.units.convert_units(-self.interface_depth(), "m")
+
         z_top       = self.units.convert_units(-self.top_depth(), "m")
         z_bottom    = self.units.convert_units(-self.bottom_depth(), "m")
-
+        if self.not_glued:
+            z_interface = z_top
     
         # --- Crystalline (bottom) layer: standard 3D simplex mesh ---
        
@@ -72,7 +76,16 @@ class CombinedGeometry:
 
         fn_bottom = pp.create_fracture_network(fractures, domain=pp.Domain(box_bottom))
         mdg_bottom = pp.create_mdg("simplex", self.meshing_arguments(), fn_bottom)
-        # self.mdg = mdg_bottom
+        if self.not_glued:
+            mdg_bottom.compute_geometry()
+            self.mdg = mdg_bottom
+            self.mdg.set_boundary_grid_projections()
+            self.nd: int = self.mdg.dim_max()
+
+            # Create projections between local and global coordinates for fracture grids.
+            pp.set_local_coordinate_projections(self.mdg)
+            return
+
 
         g_3d_bottom = mdg_bottom.subdomains(dim=3)[0]
         g_2d =  mdg_bottom.subdomains(dim=2)[0]
