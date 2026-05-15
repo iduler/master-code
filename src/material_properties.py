@@ -21,7 +21,7 @@ class HeterogeneousProperties(pp.PorePyModel):
         ``layers["crystalline"]`` otherwise.
 
         Parameters:
-            subdomains: List of subdomains. 
+            subdomains: List of subdomains.
             property_name: Attribute name on ``pp.SolidConstants`` (e.g.
                 ``"density"``, ``"shear_modulus"``).
 
@@ -36,7 +36,6 @@ class HeterogeneousProperties(pp.PorePyModel):
             self.params["layer_parameters"]["interface_depth"], "m"
         )
         layers = self.params["layer_parameters"]
-
         # For sedimentary and crystalline rock.
         sed = layers["sedimentary"]
         cryst = layers["crystalline"]
@@ -45,13 +44,11 @@ class HeterogeneousProperties(pp.PorePyModel):
         value_2 = getattr(cryst, property_name)
 
         vals = []
-
         # Assign sedimentary value to cells above the interface, crystalline below.
         for sd in subdomains:
             z = sd.cell_centers[2]
             heterogeneous_values = np.where(z > interface, value_1, value_2)
             vals.append(heterogeneous_values)
-
         # hstack does not work with an empty list.
         if len(vals) == 0:
             return np.array([])
@@ -119,6 +116,7 @@ class HeterogeneousProperties(pp.PorePyModel):
         """
         vals = self.make_heterogeneous(subdomains, "lame_lambda")
         vals = self.units.convert_units(vals, "Pa")
+
         return pp.wrap_as_dense_ad_array(vals, "lame_lambda")
 
 
@@ -131,15 +129,7 @@ class HeterogeneousProperties(pp.PorePyModel):
         vals = self.make_heterogeneous(subdomains, "shear_modulus")
         vals = self.units.convert_units(vals, "Pa")
         return pp.wrap_as_dense_ad_array(vals, "shear_modulus")
-    def cohesion(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-            """Compute cohesion for heterogeneous rock layers.
-            
-            Returns cohesion values in Pa for sedimentary and crystalline layers
-            based on cell center depths relative to the interface.
-            """
-        # vals = self.make_heterogeneous(subdomains, "cohesion")
-        # vals = self.units.convert_units(vals, "Pa")
-        # return pp.wrap_as_dense_ad_array(vals, "cohesion")
+    
 
     def residual_aperture(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute residual aperture for heterogeneous rock layers.
@@ -217,7 +207,7 @@ class HeterogeneousProperties(pp.PorePyModel):
     def bulk_modulus(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Compute bulk modulus for heterogeneous rock layers.
         
-        Returns bulk modulus values in Pa for sedimentary and crystalline layers
+        Returns the drained bulk modulus values in Pa for sedimentary and crystalline layers
         based on cell center depths relative to the interface.
         Calculated as K = λ + (2/3)μ
         """
@@ -230,7 +220,7 @@ class HeterogeneousProperties(pp.PorePyModel):
 
     def stiffness_tensor(self, subdomains: pp.Grid) -> pp.FourthOrderTensor:
         """Compute stiffness tensor for heterogeneous rock layers.
-        
+
         Returns fourth-order stiffness tensor in Pa for sedimentary and crystalline layers
         based on cell center depths relative to the interface.
         """
