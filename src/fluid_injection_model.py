@@ -8,7 +8,7 @@ from export_deltas import ExportDeltasMixin
 from boundary_conditions import PressureBoundaryConditions, MechanicalBoundaryConditions
 
 
-from shedule_and_stabilization import ScheduleClippingTimeManager, PreinjectionStabilization
+from schedule_and_stabilization import ScheduleClippingTimeManager, PreinjectionStabilization
 from material_properties import HeterogeneousProperties
 
 from porepy.applications.initial_conditions.model_initial_conditions import (
