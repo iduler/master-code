@@ -1,6 +1,7 @@
-# PorePy simulation export folders (any suffix, e.g. fluid_injection_3D_1).
+# PorePy simulation export folders.
 fluid_injection_3D*/
 */fluid_injection_3D*/
+simulations/
 
 # Other simulation/output artefacts.
 gmsh_frac_file*
