@@ -2,14 +2,18 @@ import porepy as pp
 import numpy as np
 
 
-class HeterogeneousProperties(pp.PorePyModel):
-    """Mixin assigning per-cell material properties based on depth.
+class HeterogeneousProperties():
+    """Mixin assigning per-cell heterogeneous material properties based on depth.
 
-    Overrides the standard PorePy material accessors (density, porosity,
+    Overrides the standard PorePy material methods (density, porosity,
     permeability, elastic moduli, ...) so each cell's value is taken from one
     of two ``pp.SolidConstants`` objects (``sedimentary`` and ``crystalline``)
     depending on whether the cell centre lies above or below the
     sediment-crystalline interface stored in ``params["layer_parameters"]``.
+
+    Permeability uses an extra seal layer above ``depth_top_sedimentary`` with
+    a low (cap-rock) value; all other properties share the sedimentary
+    values within the seal sub-layer.
     """
 
     def make_heterogeneous(self, subdomains: list[pp.Grid], property_name: str) -> np.ndarray:
@@ -26,80 +30,74 @@ class HeterogeneousProperties(pp.PorePyModel):
                 ``"density"``, ``"shear_modulus"``).
 
         Returns:
-            1D numpy array of length ``sum(sd.num_cells for sd in subdomains)``
-            containing the per-cell raw values (no unit conversion applied).
-            Returns an empty array if ``subdomains`` is empty.
+            1D numpy array.
         """
         # interface_depth is stored as a positive depth; flip the sign so it
         # matches the z-coordinate convention (z = 0 at surface, z < 0 below).
         interface = -self.units.convert_units(
             self.params["layer_parameters"]["interface_depth"], "m"
         )
+        interface_2 = -self.units.convert_units(
+            self.params["layer_parameters"]["depth_top_sedimentary"], "m"
+        )
+
         layers = self.params["layer_parameters"]
-        # For sedimentary and crystalline rock.
+
         sed = layers["sedimentary"]
         cryst = layers["crystalline"]
 
+
+
+        # Pull the requested property from each SolidConstants object.
         value_1 = getattr(sed, property_name)
         value_2 = getattr(cryst, property_name)
+        value_3 = 1.0e-18 # m^2 permeability for the top layer.
 
         vals = []
-        # Assign sedimentary value to cells above the interface, crystalline below.
         for sd in subdomains:
             z = sd.cell_centers[2]
-            heterogeneous_values = np.where(z > interface, value_1, value_2)
+            if property_name == "permeability":
+                # Three layers for permeability: seal (top) / sedimentary / crystalline.
+                heterogeneous_values = np.select(
+                    [z > interface_2, z > interface],
+                    [value_3, value_1],
+                    default=value_2,
+                )
+            else:
+                # Two layers: sedimentary above the interface, crystalline below.
+                heterogeneous_values = np.where(z > interface, value_1, value_2)
+
             vals.append(heterogeneous_values)
-        # hstack does not work with an empty list.
         if len(vals) == 0:
             return np.array([])
-        else:
-            return np.hstack(vals)
+
+        return np.hstack(vals)
        
     def solid_density(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute solid density for heterogeneous rock layers.
-        
-        Returns solid density values in kg/m³ for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell solid density (kg/m^3)."""
         vals = self.make_heterogeneous(subdomains,"density")
         vals = self.units.convert_units(vals, "kg*m^-3")
         return pp.wrap_as_dense_ad_array(vals, "density")
-        
-        
+
+
     def reference_porosity(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute reference porosity for heterogeneous rock layers.
-        
-        Returns porosity values (dimensionless) for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell reference porosity (dimensionless)."""
         vals = self.make_heterogeneous(subdomains, "porosity")
         return pp.wrap_as_dense_ad_array(vals, "reference_porosity")
 
     def friction_coefficient(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute friction coefficient for heterogeneous rock layers.
-        
-        Returns friction coefficient values (dimensionless) for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell friction coefficient (dimensionless)."""
         vals = self.make_heterogeneous(subdomains, "friction_coefficient")
         return pp.wrap_as_dense_ad_array(vals, "friction_coefficient")
 
 
     def biot_coefficient(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute Biot coefficient for heterogeneous rock layers.
-        
-        Returns Biot coefficient values (dimensionless) for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell Biot coefficient (dimensionless)."""
         vals = self.make_heterogeneous(subdomains, "biot_coefficient")
         return pp.wrap_as_dense_ad_array(vals, "biot_coefficient")
 
     def permeability(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute permeability tensor for heterogeneous rock layers.
-        
-        Returns isotropic permeability tensor in m² for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell isotropic permeability tensor (m^2)."""
         vals = self.make_heterogeneous(subdomains, "permeability")
         vals = self.units.convert_units(vals, "m^2")
 
@@ -109,11 +107,7 @@ class HeterogeneousProperties(pp.PorePyModel):
 
 
     def lame_lambda(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute Lamé's first parameter for heterogeneous rock layers.
-        
-        Returns Lamé lambda values in Pa for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell Lamé's first parameter (Pa)."""
         vals = self.make_heterogeneous(subdomains, "lame_lambda")
         vals = self.units.convert_units(vals, "Pa")
 
@@ -121,55 +115,35 @@ class HeterogeneousProperties(pp.PorePyModel):
 
 
     def shear_modulus(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute shear modulus for heterogeneous rock layers.
-        
-        Returns shear modulus values in Pa for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell shear modulus (Pa)."""
         vals = self.make_heterogeneous(subdomains, "shear_modulus")
         vals = self.units.convert_units(vals, "Pa")
         return pp.wrap_as_dense_ad_array(vals, "shear_modulus")
-    
+
 
     def residual_aperture(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute residual aperture for heterogeneous rock layers.
-        
-        Returns residual aperture values in m for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell residual aperture (m)."""
         vals = self.make_heterogeneous(subdomains, "residual_aperture")
         vals = self.units.convert_units(vals, "m")
         return pp.wrap_as_dense_ad_array(vals, "residual_aperture")
-    
+
 
     def fracture_gap(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute fracture gap for heterogeneous rock layers.
-        
-        Returns fracture gap values in m for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell fracture gap (m)."""
         vals = self.make_heterogeneous(subdomains, "fracture_gap")
         vals = self.units.convert_units(vals, "m")
         return pp.wrap_as_dense_ad_array(vals, "fracture_gap")
 
 
     def normal_permeability(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
-        """Compute normal permeability for heterogeneous rock layers.
-        
-        Returns normal permeability values in m² for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell normal permeability (m^2)."""
         vals = self.make_heterogeneous(subdomains, "normal_permeability")
         vals = self.units.convert_units(vals, "m^2")
         return pp.wrap_as_dense_ad_array(vals, "normal_permeability")
 
 
     def biot_tensor(self, subdomains: list[pp.Grid]) -> pp.SecondOrderTensor:
-        """Compute Biot tensor for heterogeneous rock layers.
-        
-        Returns Biot coefficient tensor (dimensionless) for sedimentary and crystalline layers
-        based on cell center depths relative to the interface.
-        """
+        """Per-cell Biot tensor (dimensionless)."""
         biot_values = self.make_heterogeneous(subdomains,"biot_coefficient")
 
         return pp.SecondOrderTensor(biot_values)
@@ -189,16 +163,14 @@ class HeterogeneousProperties(pp.PorePyModel):
         # Convert to proper units (Pa). 
         E = self.units.convert_units(E, "Pa")
 
-        # PorePy multiplies E against the contact traction vector to compute
-        # the characteristic traction. That traction vector has more entries
-        # than fracture cells: each cell contributes `nd` components (one per
-        # spatial direction) on each of the fracture's 2 sides, giving a total
-        # length of `n_fracture_cells * 2 * nd` (= 6 in 3D).
+        # PorePy multiplies E by the contact traction vector. That vector has
+        # 2 * nd entries per fracture cell (nd components on each of 2 sides),
+        # so its total length is n_fracture_cells * 2 * nd.
         #
-        # PorePy's default returns Young's modulus as a single number, which
-        # broadcasts against any size. Our heterogeneous version returns one
-        # value per fracture cell, so we repeat each value `2 * nd` times to
-        # line it up with the traction vector cell-by-cell.
+        # The default E is a single number that multiplies every entry. Our
+        # heterogeneous E has one value per cell, so we repeat each value
+        # 2 * nd times to line it up cell-by-cell with the traction vector.
+
         E = np.repeat(E, 2 * self.nd)
 
         return pp.wrap_as_dense_ad_array(E, "youngs_modulus")
@@ -245,6 +217,7 @@ class HeterogeneousProperties(pp.PorePyModel):
                 aperture *= self.solid.well_radius
             else:
                 aperture = self.make_heterogeneous([subdomains], "residual_aperture")
+                aperture = self.units.convert_units(aperture, "m")
         else:
             # For the matrix, the aperture is one, but needs to be scaled by the
             # length units.
