@@ -39,8 +39,16 @@ Install Docker, VS Code and its Dev Containers extension.
 In VS Code, open the Command Palette (`Ctrl+Shift+P`) and run:
 
 ```
-git clone https://github.com/iduler/master-code.git
+Git: Clone
 ```
+
+Then paste this url to clone it:
+
+```
+https://github.com/iduler/master-code.git
+```
+
+Then select a location to save it.
 
 ### Step 3: Open the folder in the container
 
@@ -55,7 +63,7 @@ Dev Containers: Open Folder in Container...
 
 The entry point is `src/fluid_injection_model.py`. It imports the other modules in `src/`, so it must be run from inside that directory.
 
-Run eter way:
+Run either way:
 - **Play button:** open `src/fluid_injection_model.py` and click the ▶ button in the top-right corner of the editor.
 - **Terminal:** open a terminal in VS Code (**Terminal → New Terminal**) and run:
 
@@ -83,6 +91,7 @@ Running `fluid_injection_model.py` writes the results to `master-code/fluid_inje
 
 Examples of quantities available for visualization:
 
+- Geometry
 - Pressure
 - Displacement
 - Slip tendency
